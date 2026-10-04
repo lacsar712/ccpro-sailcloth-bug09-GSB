@@ -39,21 +39,33 @@ const selectedDips = computed(() => {
   return dips.value.filter((d) => d.rollId === selectedId.value)
 })
 
+// 流水按「服务器自然日」分组：后端按服务器时区（Asia/Shanghai）输出
+// startedAt 的本地墙钟串（无时区偏移），其日期段即记录所属的服务器自然日，
+// 直接截取；不要按浏览器时区折算，否则日界被折叠，新写入会落昨天组或空组。
+const SERVER_TIME_ZONE = 'Asia/Shanghai'
+
 function dayKey(iso) {
-  const d = new Date(iso)
-  d.setHours(d.getHours() - 8)
-  return d.toISOString().slice(0, 10)
+  return String(iso).slice(0, 10)
 }
 
-const todayKey = computed(() => {
-  const d = new Date()
-  d.setHours(d.getHours() - 8)
-  return d.toISOString().slice(0, 10)
+const serverDayFmt = new Intl.DateTimeFormat('en-US', {
+  timeZone: SERVER_TIME_ZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
 })
 
-const todayFeed = computed(() =>
-  dips.value.filter((row) => dayKey(row.startedAt) === todayKey.value)
-)
+function serverTodayKey() {
+  const parts = Object.fromEntries(
+    serverDayFmt.formatToParts(new Date()).map((p) => [p.type, p.value])
+  )
+  return `${parts.year}-${parts.month}-${parts.day}`
+}
+
+const todayFeed = computed(() => {
+  const key = serverTodayKey()
+  return dips.value.filter((row) => dayKey(row.startedAt) === key)
+})
 
 const recentFeed = computed(() => dips.value.slice(0, 12))
 
