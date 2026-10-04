@@ -5,6 +5,9 @@ import api from '../api'
 const lofts = ref([])
 const rolls = ref([])
 const dips = ref([])
+const todayKey = ref('')
+const totalDipCount = ref(0)
+const todayDipCount = ref(0)
 const error = ref('')
 const panelError = ref('')
 const selectedId = ref(null)
@@ -19,10 +22,26 @@ const dipForm = reactive({
   notes: '',
 })
 
-function localNow() {
-  const d = new Date()
-  d.setMinutes(d.getMinutes() - d.getTimezoneOffset())
-  return d.toISOString().slice(0, 16)
+// datetime-local 不带时区：默认值取服务器时区(Asia/Shanghai)墙钟时间，
+// 提交时也显式按 +08:00 解释，保证新写入落进服务器自然日的今天组，
+// 与工人浏览器/容器所在时区无关。
+function shanghaiNowInput() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date())
+  const p = Object.fromEntries(parts.map((x) => [x.type, x.value]))
+  return `${p.year}-${p.month}-${p.day}T${p.hour === '24' ? '00' : p.hour}:${p.minute}`
+}
+
+function asShanghaiIso(localInput) {
+  const withSeconds = localInput.length === 16 ? `${localInput}:00` : localInput
+  return `${withSeconds}+08:00`
 }
 
 const selected = computed(() => rolls.value.find((r) => r.id === selectedId.value) || null)
@@ -39,35 +58,53 @@ const selectedDips = computed(() => {
   return dips.value.filter((d) => d.rollId === selectedId.value)
 })
 
-function dayKey(iso) {
-  const d = new Date(iso)
-  d.setHours(d.getHours() - 8)
-  return d.toISOString().slice(0, 10)
-}
-
-const todayKey = computed(() => {
-  const d = new Date()
-  d.setHours(d.getHours() - 8)
-  return d.toISOString().slice(0, 10)
+// 流水分组完全以后端给的服务器自然日 dayKey 为准，前端不再做时区折叠。
+const feedGroups = computed(() => {
+  const groups = []
+  const index = new Map()
+  for (const row of dips.value) {
+    let g = index.get(row.dayKey)
+    if (!g) {
+      g = { key: row.dayKey, rows: [] }
+      index.set(row.dayKey, g)
+      groups.push(g)
+    }
+    g.rows.push(row)
+  }
+  return groups.map((g) => ({ ...g, label: dayLabel(g.key) }))
 })
 
-const todayFeed = computed(() =>
-  dips.value.filter((row) => dayKey(row.startedAt) === todayKey.value)
-)
-
-const recentFeed = computed(() => dips.value.slice(0, 12))
+function dayLabel(key) {
+  if (key === todayKey.value) return '今天'
+  if (todayKey.value) {
+    const [y, m, d] = todayKey.value.split('-').map(Number)
+    const prev = new Date(y, m - 1, d - 1)
+    const py = prev.getFullYear()
+    const pm = String(prev.getMonth() + 1).padStart(2, '0')
+    const pd = String(prev.getDate()).padStart(2, '0')
+    if (key === `${py}-${pm}-${pd}`) return '昨天'
+  }
+  return key
+}
 
 async function load() {
   error.value = ''
   try {
-    const [l, r, d] = await Promise.all([
+    const [l, r, d, t] = await Promise.all([
       api.get('/lofts/'),
       api.get('/rolls/'),
       api.get('/dips/'),
+      api.get('/dips/today/'),
     ])
     lofts.value = l.data.results || l.data
     rolls.value = r.data.results || r.data
+    // 挂签/流水「总条数」用分页器 count，直接对库，不取本页数组长度
+    totalDipCount.value =
+      typeof d.data.count === 'number' ? d.data.count : (d.data.results || d.data).length
     dips.value = d.data.results || d.data
+    // 「今天组」整条口径（含条数）都由服务器自然日接口给出
+    todayKey.value = t.data.today || ''
+    todayDipCount.value = t.data.count ?? (t.data.results || []).length
   } catch {
     error.value = '晾晒架加载失败'
   }
@@ -76,7 +113,7 @@ async function load() {
 function openRoll(roll) {
   selectedId.value = roll.id
   panelError.value = ''
-  dipForm.startedAt = localNow()
+  dipForm.startedAt = shanghaiNowInput()
   dipForm.resinPct = 28
   dipForm.cureHours = ''
   dipForm.notes = ''
@@ -112,7 +149,7 @@ async function logDip() {
   try {
     await api.post('/dips/', {
       rollId: selected.value.id,
-      startedAt: new Date(dipForm.startedAt).toISOString(),
+      startedAt: asShanghaiIso(dipForm.startedAt),
       resinPct: dipForm.resinPct,
       cureHours:
         dipForm.cureHours === '' || dipForm.cureHours === null
@@ -129,7 +166,7 @@ async function logDip() {
     }
     dipForm.cureHours = ''
     dipForm.notes = ''
-    dipForm.startedAt = localNow()
+    dipForm.startedAt = shanghaiNowInput()
     await load()
   } catch (e) {
     panelError.value =
@@ -180,7 +217,7 @@ onMounted(load)
           >
             <span class="peg" aria-hidden="true" />
             <span class="hang-tag" :class="'tag-' + roll.status">
-              {{ statusLabel[roll.status] || roll.status }}
+              {{ statusLabel[roll.status] || roll.status }} · {{ roll.dipCount ?? 0 }} 笔
             </span>
             <span class="chip-code">{{ roll.rollCode }}</span>
             <span class="chip-gsm">{{ roll.fabricWeightGsm }} gsm</span>
@@ -193,17 +230,28 @@ onMounted(load)
 
     <section class="dip-feed panel">
       <h2 class="feed-title">浸渍流水</h2>
-      <p class="sub">今天组 {{ todayFeed.length }} 条</p>
+      <p class="sub">
+        今天组 {{ todayDipCount }} 条<span v-if="todayKey">（服务器自然日 {{ todayKey }}）</span>
+        · 全库共 {{ totalDipCount }} 条
+      </p>
       <p class="hint" style="margin: 0 0 12px">架下次要信息流；主操作在右侧布卷面板完成。</p>
-      <ul v-if="recentFeed.length" class="feed-list">
-        <li v-for="row in recentFeed" :key="row.id">
-          <strong>{{ row.rollCode }}</strong>
-          <span class="feed-loft">{{ row.loftName }}</span>
-          <span>{{ new Date(row.startedAt).toLocaleString() }}</span>
-          <span>树脂 {{ row.resinPct }}%</span>
-          <span>固化 {{ row.cureHours ?? '—' }} h</span>
-        </li>
-      </ul>
+      <template v-if="feedGroups.length">
+        <div v-for="g in feedGroups" :key="g.key" class="feed-group">
+          <h3 class="feed-day">
+            {{ g.label }}
+            <span class="feed-day-meta">{{ g.key }} · {{ g.rows.length }} 条</span>
+          </h3>
+          <ul class="feed-list">
+            <li v-for="row in g.rows" :key="row.id">
+              <strong>{{ row.rollCode }}</strong>
+              <span class="feed-loft">{{ row.loftName }}</span>
+              <span>{{ new Date(row.startedAt).toLocaleString() }}</span>
+              <span>树脂 {{ row.resinPct }}%</span>
+              <span>固化 {{ row.cureHours ?? '—' }} h</span>
+            </li>
+          </ul>
+        </div>
+      </template>
       <p v-else class="hint" style="margin:0">暂无浸渍记录</p>
     </section>
 

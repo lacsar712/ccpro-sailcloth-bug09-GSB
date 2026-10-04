@@ -13,10 +13,25 @@ const form = reactive({
   notes: '',
 })
 
-function localNow() {
-  const d = new Date()
-  d.setMinutes(d.getMinutes() - d.getTimezoneOffset())
-  return d.toISOString().slice(0, 16)
+// datetime-local 不带时区：默认值/提交均以服务器时区 Asia/Shanghai 为准，
+// 与工人浏览器/容器所在时区无关。
+function shanghaiNowInput() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date())
+  const p = Object.fromEntries(parts.map((x) => [x.type, x.value]))
+  return `${p.year}-${p.month}-${p.day}T${p.hour === '24' ? '00' : p.hour}:${p.minute}`
+}
+
+function asShanghaiIso(localInput) {
+  const withSeconds = localInput.length === 16 ? `${localInput}:00` : localInput
+  return `${withSeconds}+08:00`
 }
 
 async function load() {
@@ -26,7 +41,7 @@ async function load() {
     dips.value = d.data.results || d.data
     rolls.value = r.data.results || r.data
     if (!form.rollId && rolls.value.length) form.rollId = rolls.value[0].id
-    if (!form.startedAt) form.startedAt = localNow()
+    if (!form.startedAt) form.startedAt = shanghaiNowInput()
   } catch {
     error.value = '加载失败'
   }
@@ -37,7 +52,7 @@ async function create() {
   try {
     const payload = {
       rollId: form.rollId,
-      startedAt: new Date(form.startedAt).toISOString(),
+      startedAt: asShanghaiIso(form.startedAt),
       resinPct: form.resinPct,
       cureHours: form.cureHours === '' || form.cureHours === null ? null : form.cureHours,
       notes: form.notes,
@@ -45,7 +60,7 @@ async function create() {
     await api.post('/dips/', payload)
     form.cureHours = ''
     form.notes = ''
-    form.startedAt = localNow()
+    form.startedAt = shanghaiNowInput()
     await load()
   } catch (e) {
     error.value = e.response?.data?.detail || JSON.stringify(e.response?.data) || '创建失败'

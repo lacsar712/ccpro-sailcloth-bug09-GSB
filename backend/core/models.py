@@ -54,7 +54,7 @@ class DipRun(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        ordering = ["-started_at"]
+        ordering = ["-started_at", "-id"]
 
     def __str__(self):
         return f"Dip@{self.roll_id} {self.started_at}"

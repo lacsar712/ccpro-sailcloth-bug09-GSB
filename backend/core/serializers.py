@@ -1,3 +1,4 @@
+from django.utils import timezone
 from rest_framework import serializers
 
 from .models import ClothRoll, DipRun, Loft
@@ -23,6 +24,7 @@ class ClothRollSerializer(serializers.ModelSerializer):
     rollCode = serializers.CharField(source="roll_code")
     fabricWeightGsm = serializers.IntegerField(source="fabric_weight_gsm", required=False)
     loftName = serializers.CharField(source="loft.name", read_only=True)
+    dipCount = serializers.SerializerMethodField()
 
     class Meta:
         model = ClothRoll
@@ -33,11 +35,17 @@ class ClothRollSerializer(serializers.ModelSerializer):
             "rollCode",
             "status",
             "fabricWeightGsm",
+            "dipCount",
             "notes",
             "created_at",
             "updated_at",
         )
-        read_only_fields = ("id", "loftName", "created_at", "updated_at")
+        read_only_fields = ("id", "loftName", "dipCount", "created_at", "updated_at")
+
+    def get_dipCount(self, obj):
+        if hasattr(obj, "dip_count"):
+            return obj.dip_count
+        return obj.dip_runs.count()
 
     def validate(self, attrs):
         loft = attrs.get("loft") or getattr(self.instance, "loft", None)
@@ -67,7 +75,10 @@ class DipRunSerializer(serializers.ModelSerializer):
     rollId = serializers.PrimaryKeyRelatedField(
         source="roll", queryset=ClothRoll.objects.all()
     )
-    startedAt = serializers.DateTimeField(source="started_at", format="%Y-%m-%dT%H:%M:%S")
+    # 默认 ISO-8601 输出（含 +08:00 偏移），不能再用裸格式丢掉时区，
+    # 否则浏览器会按本地时区误解析导致跨天分组错位。
+    startedAt = serializers.DateTimeField(source="started_at")
+    dayKey = serializers.SerializerMethodField()
     resinPct = serializers.DecimalField(source="resin_pct", max_digits=5, decimal_places=2)
     cureHours = serializers.DecimalField(
         source="cure_hours",
@@ -87,9 +98,14 @@ class DipRunSerializer(serializers.ModelSerializer):
             "rollCode",
             "loftName",
             "startedAt",
+            "dayKey",
             "resinPct",
             "cureHours",
             "notes",
             "created_at",
         )
-        read_only_fields = ("id", "rollCode", "loftName", "created_at")
+        read_only_fields = ("id", "rollCode", "loftName", "dayKey", "created_at")
+
+    def get_dayKey(self, obj):
+        # 以服务器时区（Asia/Shanghai）的自然日作为唯一分组口径
+        return timezone.localtime(obj.started_at).date().isoformat()

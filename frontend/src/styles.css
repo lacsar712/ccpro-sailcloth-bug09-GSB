@@ -342,6 +342,17 @@ th { background: var(--canvas-deep); color: var(--navy); }
 .feed-list.compact li { padding: 6px 0; }
 .feed-loft { color: var(--muted); }
 
+.feed-group { margin-bottom: 16px; }
+.feed-day {
+  margin: 0 0 6px;
+  font-size: 0.95rem;
+  color: var(--navy);
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+.feed-day-meta { font-size: 0.8rem; color: var(--muted); font-weight: normal; }
+
 .drawer-backdrop {
   position: fixed;
   inset: 0;
